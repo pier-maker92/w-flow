@@ -7,7 +7,7 @@ use_velocity_quant: false
 
 training:
   output_dir: checkpoints/exps/d1-mnist-bsq-64
-  num_train_epochs: 50
+  num_train_epochs: 10
   per_device_train_batch_size: 128
   learning_rate: 2e-4
   lr_scheduler_type: cosine
@@ -52,14 +52,14 @@ unet_backbone:
 dit_backbone: null
 
 velocity_ae_config:
-  hidden_dim: 64
-  bottleneck_dim: 64
+  hidden_dim: 256
+  bottleneck_dim: 4
 
 vq: null
 fsq: null
 bsq:
-  dim: 64
-  in_dim: 64
+  dim: 4
+  in_dim: 4
 
 stochastic_dequantizer: null
 residual_dequantizer: null

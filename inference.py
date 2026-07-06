@@ -37,6 +37,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save_grid", action="store_true")
     parser.add_argument("--return_trajectory", action="store_true")
+    parser.add_argument("--disable_quantization", action="store_true")
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -57,6 +58,7 @@ def main() -> None:
             x0=x0,
             num_steps=args.num_steps,
             return_trajectory=args.return_trajectory,
+            disable_quantization=args.disable_quantization,
         )
 
     torch.save({"x1": out.x1.cpu(), "trajectory": out.trajectory}, args.output)

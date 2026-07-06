@@ -45,40 +45,54 @@ class ODESolver:
 
         applied = [False] * len(waypoints)
         x = x0.clone()
-        dt = 1.0 / num_steps
-        ts = torch.linspace(0.0, 1.0 - dt, num_steps, device=x0.device)
+        t = 0.0
 
         traj = [x.clone()] if return_trajectory else None
 
-        for t_scalar in ts:
-            t_float = float(t_scalar)
+        while t < 1.0 - 1e-5:
+            # Default proposed step
+            dt = 1.0 / num_steps
+            t_next = min(t + dt, 1.0)
 
-            # Apply each waypoint the first time t crosses it
+            # Intercept with unapplied waypoints
             for i, (tq, qfn) in enumerate(waypoints):
-                if not applied[i] and t_float >= tq:
+                if not applied[i] and t < tq <= t_next + 1e-5:
+                    t_next = tq
+                    break
+
+            dt_step = t_next - t
+
+            if dt_step > 1e-6:
+                t_vec = x.new_full((x.shape[0],), t)
+
+                if self.method == "euler":
+                    x = x + dt_step * velocity_fn(x, t_vec)
+                elif self.method == "midpoint":
+                    v1 = velocity_fn(x, t_vec)
+                    x_mid = x + 0.5 * dt_step * v1
+                    t_mid = x.new_full((x.shape[0],), t + 0.5 * dt_step)
+                    x = x + dt_step * velocity_fn(x_mid, t_mid)
+                else:  # rk4
+                    v1 = velocity_fn(x, t_vec)
+                    t_half = x.new_full((x.shape[0],), t + 0.5 * dt_step)
+                    t_full = x.new_full((x.shape[0],), t + dt_step)
+                    v2 = velocity_fn(x + 0.5 * dt_step * v1, t_half)
+                    v3 = velocity_fn(x + 0.5 * dt_step * v2, t_half)
+                    v4 = velocity_fn(x + dt_step * v3, t_full)
+                    x = x + (dt_step / 6) * (v1 + 2 * v2 + 2 * v3 + v4)
+
+                if traj is not None:
+                    traj.append(x.clone())
+
+            t = t_next
+
+            # Apply waypoint if we landed exactly on it
+            for i, (tq, qfn) in enumerate(waypoints):
+                if not applied[i] and abs(t - tq) <= 1e-5:
                     x = qfn(x)
                     applied[i] = True
-
-            t_vec = x.new_full((x.shape[0],), t_scalar)
-
-            if self.method == "euler":
-                x = x + dt * velocity_fn(x, t_vec)
-            elif self.method == "midpoint":
-                v1 = velocity_fn(x, t_vec)
-                x_mid = x + 0.5 * dt * v1
-                t_mid = x.new_full((x.shape[0],), t_float + 0.5 * dt)
-                x = x + dt * velocity_fn(x_mid, t_mid)
-            else:  # rk4
-                v1 = velocity_fn(x, t_vec)
-                t_half = x.new_full((x.shape[0],), t_float + 0.5 * dt)
-                t_full = x.new_full((x.shape[0],), t_float + dt)
-                v2 = velocity_fn(x + 0.5 * dt * v1, t_half)
-                v3 = velocity_fn(x + 0.5 * dt * v2, t_half)
-                v4 = velocity_fn(x + dt * v3, t_full)
-                x = x + (dt / 6) * (v1 + 2 * v2 + 2 * v3 + v4)
-
-            if traj is not None:
-                traj.append(x.clone())
+                    if traj is not None and dt_step > 1e-6:
+                        traj[-1] = x.clone()
 
         trajectory = torch.stack(traj, dim=1) if traj is not None else None
         return SolverOutput(x1=x, trajectory=trajectory)

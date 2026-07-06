@@ -354,12 +354,13 @@ class FlowQuant(nn.Module):
         x0: torch.FloatTensor,
         num_steps: Optional[int] = None,
         return_trajectory: bool = False,
+        disable_quantization: bool = False,
     ) -> SolverOutput:
         steps = num_steps if num_steps is not None else self.config.flow_config.num_steps
         velocity_fn = self._make_velocity_fn(x0)
 
         if self._is_multi:
-            return self._sample_multi(x0, velocity_fn, steps, return_trajectory)
+            return self._sample_multi(x0, velocity_fn, steps, return_trajectory, disable_quantization)
 
         t_q = self.config.flow_config.t_q if not self.config.use_velocity_quant else None
         quant_target = self.config.flow_config.quant_target
@@ -409,8 +410,8 @@ class FlowQuant(nn.Module):
             x0=x0,
             velocity_fn=velocity_fn,
             num_steps=steps,
-            t_q=t_q,
-            quantize_fn=quantize_fn if t_q is not None else None,
+            t_q=t_q if not disable_quantization else None,
+            quantize_fn=quantize_fn if (t_q is not None and not disable_quantization) else None,
             return_trajectory=return_trajectory,
         )
 
@@ -420,9 +421,12 @@ class FlowQuant(nn.Module):
         velocity_fn: Callable,
         num_steps: int,
         return_trajectory: bool,
+        disable_quantization: bool = False,
     ) -> SolverOutput:
         """Inference with multiple VQ waypoints applied in sequence."""
         t_qs = self.config.flow_config.waypoints()
+        if disable_quantization:
+            t_qs = []
 
         def make_qfn(i: int, tq: float) -> Callable:
             def qfn(x: torch.Tensor) -> torch.Tensor:
