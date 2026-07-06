@@ -178,7 +178,10 @@ def sample_forced_code(model, x0: torch.Tensor, target_code: int, sigma: float =
 # Plotting helpers
 # ---------------------------------------------------------------------------
 
-PALETTE = plt.cm.get_cmap("tab10")
+try:
+    PALETTE = plt.cm.get_cmap("tab10")
+except AttributeError:
+    PALETTE = plt.colormaps.get_cmap("tab10")
 
 
 def code_colors(codes: torch.Tensor, K: int) -> list:
