@@ -133,6 +133,7 @@ def sample_forced_code(model, x0: torch.Tensor, target_code: int, sigma: float =
     """
     cfg = model.config.flow_config
     t_q = cfg.t_q
+    quant_target = cfg.quant_target
 
     def quantize_fn(x):
         B = x.shape[0]
@@ -140,12 +141,25 @@ def sample_forced_code(model, x0: torch.Tensor, target_code: int, sigma: float =
 
         if isinstance(model.dequantizer, StochasticDequantizer):
             noise = torch.randn_like(z_q_vec) * sigma
-            x_hat = z_q_vec + noise
+            z_q_vec = z_q_vec + noise
         elif isinstance(model.dequantizer, ResidualDequantizer):
             alpha = model.dequantizer.config.alpha
-            x_hat = (1 - alpha) * z_q_vec + alpha * x
+            # Approximation for forced code
+            z_q_vec = (1 - alpha) * z_q_vec + alpha * z_q_vec
+
+        if quant_target == "velocity_ae":
+            v_tq_hat = model.velocity_ae.decode(z_q_vec)
+            v_tq_hat = v_tq_hat.reshape(x.shape)
+            x_hat = x0 + t_q * v_tq_hat
+        elif quant_target == "feature":
+            if model.dequantizer is not None:
+                # Stochastic/Residual applied above
+                pass
+            # Just simple reshape for demo
+            v_tq_hat = z_q_vec.reshape(x.shape)
+            x_hat = x0 + t_q * v_tq_hat
         else:
-            x_hat = z_q_vec
+            x_hat = z_q_vec.reshape(x.shape)
 
         return x_hat
 
@@ -193,36 +207,66 @@ def main():
 
     # Sample noise
     torch.manual_seed(0)
-    x0 = torch.randn(args.n_samples, 2)
+    
+    # 4 samples if image grid is requested, otherwise use args.n_samples
+    n_samples = 4 if model.config.image_size is not None else args.n_samples
+
+    if model.config.image_size is not None and model.config.in_channels is not None:
+        shape = (n_samples, model.config.in_channels, model.config.image_size, model.config.image_size)
+    else:
+        shape = (n_samples, model.config.data_dim)
+        
+    x0 = torch.randn(*shape, device=device) * model.config.flow_config.source_std
 
     # --- Normal generation with waypoint capture ---
     info = sample_with_info(model, x0, sigma=args.sigma)
-    x1 = info["x1"].numpy()
-    codes = info["codes"].numpy()
-    x_tq_raw = info["x_tq_raw"].numpy()
-    z_q = info["z_q"].numpy()
-    x_tq_hat = info["x_tq_hat"].numpy()
+    x1 = info["x1"].cpu().numpy() if model.config.image_size is None else info["x1"].cpu()
+    codes = info["codes"].cpu().numpy()
+    if info["x_tq_raw"] is not None:
+        x_tq_raw = info["x_tq_raw"].cpu().numpy() if model.config.image_size is None else None
+    if info["z_q"] is not None:
+        z_q = info["z_q"].cpu().numpy() if model.config.image_size is None else None
+    if info["x_tq_hat"] is not None:
+        x_tq_hat = info["x_tq_hat"].cpu().numpy() if model.config.image_size is None else None
 
     # Codebook vectors
-    codebook = model.quantizer.embedding.weight.detach().numpy()  # [K, 2]
+    codebook = model.quantizer.embedding.weight.detach().cpu().numpy()
 
     # --- Unique codes actually used ---
     used_codes = np.unique(codes)
     print(f"Codes used: {sorted(used_codes.tolist())} ({len(used_codes)}/{K})")
-    for k in used_codes:
-        mask = codes == k
-        cx, cy = x1[mask, 0].mean(), x1[mask, 1].mean()
-        print(f"  code {k:2d}: n={mask.sum():4d}  mean_x1=({cx:.2f},{cy:.2f})"
-              f"  codebook=({codebook[k,0]:.2f},{codebook[k,1]:.2f})")
+    if model.config.image_size is None:
+        for k in used_codes:
+            mask = codes == k
+            cx, cy = x1[mask, 0].mean(), x1[mask, 1].mean()
+            print(f"  code {k:2d}: n={mask.sum():4d}  mean_x1=({cx:.2f},{cy:.2f})"
+                  f"  codebook=({codebook[k,0]:.2f},{codebook[k,1]:.2f})")
 
     # --- Token swap: for each target code, generate from all x0 ---
     swap_results = {}
     for k in range(K):
         swap_results[k] = sample_forced_code(model, x0, target_code=k,
-                                             sigma=args.sigma).numpy()
+                                             sigma=args.sigma).cpu()
+
+    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+
+    if model.config.image_size is not None:
+        from torchvision.utils import save_image
+        
+        # Grid layout: 10 rows (codes), 4 columns (samples)
+        # We will collect all 40 generated images in a list
+        grid_images = []
+        for k in range(K):
+            # For each code k, append the 4 images
+            grid_images.append((swap_results[k].clamp(-1, 1) + 1) / 2)
+            
+        grid_tensor = torch.cat(grid_images, dim=0) # [40, C, H, W]
+        save_image(grid_tensor, args.out, nrow=n_samples)
+        print(f"Saved image grid ({K}x{n_samples}) → {args.out}")
+        return
 
     # -----------------------------------------------------------------------
-    # Figure layout: 2 rows × 3 cols
+    # Figure layout: 2 rows × 3 cols (Only for 2D Toy Data)
     # -----------------------------------------------------------------------
     fig = plt.figure(figsize=(18, 11))
     fig.suptitle(
@@ -273,7 +317,7 @@ def main():
     ax_c = fig.add_subplot(gs[0, 2])
     ax_c.set_title("C — Token swap: x₁ with forced code k")
     for k in range(K):
-        x1_swap = swap_results[k]
+        x1_swap = swap_results[k].numpy()
         ax_c.scatter(x1_swap[:, 0], x1_swap[:, 1], s=3, alpha=0.3,
                      color=PALETTE(k / K))
     ax_c.scatter(codebook[:, 0], codebook[:, 1], s=200, marker="*",
@@ -298,7 +342,7 @@ def main():
         for k2 in range(K):
             if k2 == k:
                 continue
-            x1_swap = swap_results[k2][mask_orig]
+            x1_swap = swap_results[k2][mask_orig].numpy()
             ax_d.scatter(x1_swap[:, 0], x1_swap[:, 1], s=4, alpha=0.3,
                          color=PALETTE(k2 / K), marker="x")
         ax_d.scatter(codebook[:, 0], codebook[:, 1], s=80, marker="*",
@@ -311,7 +355,6 @@ def main():
         )
         ax_d.set_xlabel("x"); ax_d.set_ylabel("y")
 
-    Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=150, bbox_inches="tight")
     print(f"Saved → {args.out}")
     plt.close(fig)
