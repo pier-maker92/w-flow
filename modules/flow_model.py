@@ -38,19 +38,32 @@ class FlowQuant(nn.Module):
         self._is_multi = n_waypoints > 1
 
         if self._is_multi:
-            # Multi-waypoint: one VQ + one LinearDequantizer per waypoint
-            assert config.vq_config is not None, "vq_config required for multi-waypoint"
-            assert config.linear_dequantizer_config is not None, \
-                "linear_dequantizer required for multi-waypoint"
+            # Multi-waypoint
+            quant_target = config.flow_config.quant_target
             self.quantizer: Optional[nn.Module] = None
             self.dequantizer: Optional[nn.Module] = None
-            self.quantizers = nn.ModuleList([
-                VectorQuantizer(config.vq_config) for _ in range(n_waypoints)
-            ])
-            self.dequantizers = nn.ModuleList([
-                LinearDequantizer(config.linear_dequantizer_config)
-                for _ in range(n_waypoints)
-            ])
+            
+            if quant_target == "feature":
+                assert config.vq_config is not None, "vq_config required for multi-waypoint"
+                assert config.linear_dequantizer_config is not None, "linear_dequantizer required for multi-waypoint feature"
+                self.quantizers = nn.ModuleList([
+                    VectorQuantizer(config.vq_config) for _ in range(n_waypoints)
+                ])
+                self.dequantizers = nn.ModuleList([
+                    LinearDequantizer(config.linear_dequantizer_config)
+                    for _ in range(n_waypoints)
+                ])
+                self.velocity_aes = None
+            elif quant_target == "velocity_ae":
+                assert config.vq_config is not None, "vq_config required for multi-waypoint"
+                assert config.velocity_ae_config is not None, "velocity_ae_config required for multi-waypoint velocity_ae"
+                self.quantizers = nn.ModuleList([
+                    VectorQuantizer(config.vq_config) for _ in range(n_waypoints)
+                ])
+                self.velocity_ae = VelocityAutoencoder(config.velocity_ae_config, config.in_channels, config.image_size)
+                self.dequantizers = None
+            else:
+                raise ValueError(f"Unsupported multi-waypoint target: {quant_target}")
         else:
             self.quantizers: Optional[nn.ModuleList] = None
             self.dequantizers: Optional[nn.ModuleList] = None
@@ -272,19 +285,37 @@ class FlowQuant(nn.Module):
         x_hats: List[torch.Tensor] = []
         all_commit: List[torch.Tensor] = []
         all_codebook: List[torch.Tensor] = []
+        all_ae: List[torch.Tensor] = []
 
         for i, tq in enumerate(t_qs):
             x_tq = (1 - tq) * x0 + tq * x1
-            t_q_vec = x0.new_full((x0.shape[0],), tq)
-            t_emb = self.backbone.time_embed(t_q_vec)
-            x_aug = (torch.cat([x_tq, x0_cond], dim=1)
-                     if (self._use_x0_cond and x0_cond is not None) else x_tq)
-            z, _ = self.backbone._encode(x_aug, t_emb)
-            z_pool = z.mean(dim=[2, 3])
-            q_out = self.quantizers[i](z_pool)
-            d_out = self.dequantizers[i](q_out.z_q)
-            v_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
-            x_hats.append(x0 + tq * v_tq_hat)
+            quant_target = self.config.flow_config.quant_target
+            
+            if quant_target == "feature":
+                t_q_vec = x0.new_full((x0.shape[0],), tq)
+                t_emb = self.backbone.time_embed(t_q_vec)
+                x_aug = (torch.cat([x_tq, x0_cond], dim=1)
+                         if (self._use_x0_cond and x0_cond is not None) else x_tq)
+                z, _ = self.backbone._encode(x_aug, t_emb)
+                z_pool = z.mean(dim=[2, 3])
+                q_out = self.quantizers[i](z_pool)
+                d_out = self.dequantizers[i](q_out.z_q)
+                v_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
+                x_hats.append(x0 + tq * v_tq_hat)
+            elif quant_target == "velocity_ae":
+                v_gt = x1 - x0
+                v_gt_spatial = v_gt.reshape(x_tq.shape) if v_gt.ndim <= 2 else v_gt
+                ae = self.velocity_ae
+                z = ae.encode(v_gt_spatial)
+                q_out = self.quantizers[i](z)
+                v_tq_hat = ae.decode(q_out.z_q)
+                v_tq_hat = v_tq_hat.reshape(x_tq.shape)
+                x_hats.append(x0 + tq * v_tq_hat)
+                
+                v_pred_ae = ae.decode(z)
+                v_pred_ae = v_pred_ae.reshape(v_gt.shape)
+                ae_loss = (v_pred_ae - v_gt).pow(2).mean()
+                all_ae.append(ae_loss)
             if q_out.commitment_loss is not None:
                 all_commit.append(q_out.commitment_loss)
             if q_out.codebook_loss is not None:
@@ -330,8 +361,11 @@ class FlowQuant(nn.Module):
 
         commitment_loss = sum(all_commit) if all_commit else None
         codebook_loss   = sum(all_codebook) if all_codebook else None
+        ae_loss         = sum(all_ae) if all_ae else None
 
         total = total_fm_loss
+        if ae_loss is not None:
+            total = total + ae_loss
         if commitment_loss is not None:
             total = total + self.config.flow_config.commitment_weight * commitment_loss
         if codebook_loss is not None:
@@ -342,6 +376,7 @@ class FlowQuant(nn.Module):
             fm_loss=total_fm_loss,
             commitment_loss=commitment_loss,
             codebook_loss=codebook_loss,
+            ae_loss=ae_loss,
             quantizer_output=None,
         )
 
@@ -427,18 +462,32 @@ class FlowQuant(nn.Module):
         t_qs = self.config.flow_config.waypoints()
         if disable_quantization:
             t_qs = []
+        quant_target = self.config.flow_config.quant_target
 
         def make_qfn(i: int, tq: float) -> Callable:
             def qfn(x: torch.Tensor) -> torch.Tensor:
-                t_vec = x.new_full((x.shape[0],), tq)
-                t_emb = self.backbone.time_embed(t_vec)
-                x_aug = torch.cat([x, x0], dim=1) if self._use_x0_cond else x
-                z, _ = self.backbone._encode(x_aug, t_emb)
-                z_pool = z.mean(dim=[2, 3])
-                q_out = self.quantizers[i](z_pool)
-                d_out = self.dequantizers[i](q_out.z_q)
-                v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
-                return x0 + tq * v_tq_hat
+                if quant_target == "feature":
+                    t_vec = x.new_full((x.shape[0],), tq)
+                    t_emb = self.backbone.time_embed(t_vec)
+                    x_aug = torch.cat([x, x0], dim=1) if (self._use_x0_cond and x0 is not None) else x
+                    z, _ = self.backbone._encode(x_aug, t_emb)
+                    z_pool = z.mean(dim=[2, 3])
+                    q_out = self.quantizers[i](z_pool)
+                    d_out = self.dequantizers[i](q_out.z_q)
+                    v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
+                    return x0 + tq * v_tq_hat
+                elif quant_target == "velocity_ae":
+                    t_vec = x.new_full((x.shape[0],), tq)
+                    v_pred = velocity_fn(x, t_vec)
+                    v_pred_spatial = v_pred.reshape(x.shape) if v_pred.ndim <= 2 else v_pred
+                    ae = self.velocity_ae
+                    z = ae.encode(v_pred_spatial)
+                    q_out = self.quantizers[i](z)
+                    v_tq_hat = ae.decode(q_out.z_q)
+                    v_tq_hat = v_tq_hat.reshape(x.shape)
+                    return x0 + tq * v_tq_hat
+                else:
+                    return x
             return qfn
 
         quantize_fns = [make_qfn(i, tq) for i, tq in enumerate(t_qs)]
