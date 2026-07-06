@@ -10,33 +10,39 @@ from .configs import (
 from .flow_model import FlowQuant
 
 
-def _optional(cfg_dict: dict[str, Any], key: str, cls):
-    raw = cfg_dict[key]
+def _optional(cfg_dict: dict[str, Any], key1: str, key2: str, cls):
+    raw = cfg_dict.get(key1)
+    if raw is None:
+        raw = cfg_dict.get(key2)
     return cls(**raw) if raw is not None else None
 
 
 def build_model(cfg_dict: dict[str, Any]) -> FlowQuant:
-    flow_config = FlowConfig(**cfg_dict["flow"])
-    training_config = TrainingConfig(**cfg_dict["training"])
+    flow_raw = cfg_dict.get("flow") or cfg_dict.get("flow_config")
+    flow_config = FlowConfig(**flow_raw) if flow_raw else None
+    
+    training_raw = cfg_dict.get("training") or cfg_dict.get("training_config")
+    training_config = TrainingConfig(**training_raw) if training_raw else None
 
-    mlp_backbone_config = _optional(cfg_dict, "mlp_backbone", MLPBackboneConfig)
-    unet_backbone_config = _optional(cfg_dict, "unet_backbone", UNetBackboneConfig)
-    dit_backbone_config = _optional(cfg_dict, "dit_backbone", DiTBackboneConfig)
+    mlp_backbone_config = _optional(cfg_dict, "mlp_backbone", "mlp_backbone_config", MLPBackboneConfig)
+    unet_backbone_config = _optional(cfg_dict, "unet_backbone", "unet_backbone_config", UNetBackboneConfig)
+    dit_backbone_config = _optional(cfg_dict, "dit_backbone", "dit_backbone_config", DiTBackboneConfig)
 
-    vq_config = _optional(cfg_dict, "vq", VQConfig)
-    fsq_config = _optional(cfg_dict, "fsq", FSQConfig)
-    bsq_config = _optional(cfg_dict, "bsq", BSQConfig) if "bsq" in cfg_dict else None
+    vq_config = _optional(cfg_dict, "vq", "vq_config", VQConfig)
+    fsq_config = _optional(cfg_dict, "fsq", "fsq_config", FSQConfig)
+    bsq_config = _optional(cfg_dict, "bsq", "bsq_config", BSQConfig)
 
     stochastic_dequantizer_config = _optional(
-        cfg_dict, "stochastic_dequantizer", StochasticDequantizerConfig
+        cfg_dict, "stochastic_dequantizer", "stochastic_dequantizer_config", StochasticDequantizerConfig
     )
     residual_dequantizer_config = _optional(
-        cfg_dict, "residual_dequantizer", ResidualDequantizerConfig
+        cfg_dict, "residual_dequantizer", "residual_dequantizer_config", ResidualDequantizerConfig
     )
-    _ld_raw = cfg_dict.get("linear_dequantizer")
+    
+    _ld_raw = cfg_dict.get("linear_dequantizer") or cfg_dict.get("linear_dequantizer_config")
     linear_dequantizer_config = LinearDequantizerConfig(**_ld_raw) if _ld_raw else None
 
-    velocity_ae_config = _optional(cfg_dict, "velocity_ae_config", VelocityAEConfig) if "velocity_ae_config" in cfg_dict else None
+    velocity_ae_config = _optional(cfg_dict, "velocity_ae_config", "velocity_ae_config", VelocityAEConfig)
 
     config = FlowQuantConfig(
         data_dim=cfg_dict["data_dim"],
