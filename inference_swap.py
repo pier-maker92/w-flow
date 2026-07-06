@@ -81,22 +81,69 @@ def sample_with_info(model, x0: torch.Tensor, sigma: float = 0.0):
 
     def quantize_fn(x):
         captured["x_tq_raw"] = x.clone()
-        q_out = model.quantizer(x)
-        captured["codes"] = q_out.indices.clone()
-        captured["z_q"] = model.quantizer.embedding(q_out.indices).clone()
-
-        # Dequantize — override sigma if requested
-        if isinstance(model.dequantizer, StochasticDequantizer):
-            noise = torch.randn_like(q_out.z_q) * sigma
-            x_hat = q_out.z_q + noise
-        elif isinstance(model.dequantizer, ResidualDequantizer):
-            alpha = model.dequantizer.config.alpha
-            x_hat = (1 - alpha) * q_out.z_q + alpha * x
-        else:
-            x_hat = q_out.z_q
-
-        captured["x_tq_hat"] = x_hat.clone()
-        return x_hat
+        quant_target = cfg.quant_target
+        
+        if quant_target == "velocity_ae":
+            t_vec = x.new_full((x.shape[0],), t_q)
+            velocity_fn = model._make_velocity_fn(x0)
+            v_pred = velocity_fn(x, t_vec)
+            v_pred_spatial = v_pred.reshape(x.shape) if v_pred.ndim <= 2 else v_pred
+            z = model.velocity_ae.encode(v_pred_spatial)
+            q_out = model.quantizer(z)
+            
+            captured["codes"] = q_out.indices.clone()
+            captured["z_q"] = model.quantizer.embedding(q_out.indices).clone()
+            
+            # Dequantize
+            z_q_vec = captured["z_q"].clone()
+            if isinstance(model.dequantizer, StochasticDequantizer):
+                noise = torch.randn_like(z_q_vec) * sigma
+                z_q_vec = z_q_vec + noise
+            elif isinstance(model.dequantizer, ResidualDequantizer):
+                alpha = model.dequantizer.config.alpha
+                z_q_vec = (1 - alpha) * z_q_vec + alpha * z_q_vec
+            
+            v_tq_hat = model.velocity_ae.decode(z_q_vec)
+            v_tq_hat = v_tq_hat.reshape(x.shape)
+            x_hat = x0 + t_q * v_tq_hat
+            captured["x_tq_hat"] = x_hat.clone()
+            return x_hat
+            
+        elif quant_target == "feature":
+            t_vec = x.new_full((x.shape[0],), t_q)
+            t_emb = model.backbone.time_embed(t_vec)
+            x_aug = torch.cat([x, x0], dim=1) if (model._use_x0_cond and x0 is not None) else x
+            z, _ = model.backbone._encode(x_aug, t_emb)
+            z_pool = z.mean(dim=[2, 3])
+            q_out = model.quantizer(z_pool)
+            
+            captured["codes"] = q_out.indices.clone()
+            captured["z_q"] = model.quantizer.embedding(q_out.indices).clone()
+            
+            z_q_vec = captured["z_q"].clone()
+            # simplified dequantize
+            v_tq_hat = z_q_vec.reshape(x.shape)
+            x_hat = x0 + t_q * v_tq_hat
+            captured["x_tq_hat"] = x_hat.clone()
+            return x_hat
+            
+        else: # "x_tq"
+            q_out = model.quantizer(x)
+            captured["codes"] = q_out.indices.clone()
+            captured["z_q"] = model.quantizer.embedding(q_out.indices).clone()
+            
+            z_q_vec = captured["z_q"].clone()
+            if isinstance(model.dequantizer, StochasticDequantizer):
+                noise = torch.randn_like(z_q_vec) * sigma
+                x_hat = z_q_vec + noise
+            elif isinstance(model.dequantizer, ResidualDequantizer):
+                alpha = model.dequantizer.config.alpha
+                x_hat = (1 - alpha) * z_q_vec + alpha * x
+            else:
+                x_hat = z_q_vec
+                
+            captured["x_tq_hat"] = x_hat.clone()
+            return x_hat
 
     num_steps = cfg.num_steps
     velocity_fn = model._make_velocity_fn(x0)
