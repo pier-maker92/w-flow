@@ -1,0 +1,55 @@
+# @package _global_
+# Minimal config to validate the full pipeline end-to-end (Phase 1, no wandb).
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/debug
+  num_train_epochs: 2
+  per_device_train_batch_size: 64
+  learning_rate: 1e-3
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.0
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 10
+  save_steps: 50
+  eval_steps: 50
+  logging_steps: 10
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: 2000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: euler
+  num_steps: 10
+  t_q: 0.5
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 64
+  num_layers: 2
+  time_embed_dim: 32
+unet_backbone: null
+dit_backbone: null
+
+vq:
+  num_embeddings: 16
+  embedding_dim: 2
+  commitment_weight: 0.25
+  use_ema: false
+fsq: null
+
+stochastic_dequantizer:
+  sigma: 0.1
+residual_dequantizer: null

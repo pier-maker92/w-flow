@@ -1,0 +1,28 @@
+# @package _global_
+# Skeleton: all booleans false, all other values null.
+# Real values live in settings/exps/*.yaml only.
+training:
+  output_dir: null
+  num_train_epochs: null
+  per_device_train_batch_size: null
+  learning_rate: null
+  lr_scheduler_type: null
+  warmup_ratio: null
+  seed: null
+  dataset_name: null
+  eval_num_samples: null
+  save_steps: null
+  eval_steps: null
+  logging_steps: null
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  # toy-2D specific
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: null
+  # injected by run_job.sh; unused in training code
+  run_id: null

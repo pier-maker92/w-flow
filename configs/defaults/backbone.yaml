@@ -1,0 +1,8 @@
+# @package _global_
+# Exactly one backbone config is non-null per experiment.
+# mlp_backbone: Phase 1 (2D toy).
+# unet_backbone: Phase 2-3 (images).
+# dit_backbone: Phase 2-3 (images, transformer).
+mlp_backbone: null
+unet_backbone: null
+dit_backbone: null

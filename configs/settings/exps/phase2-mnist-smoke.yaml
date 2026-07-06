@@ -1,0 +1,58 @@
+# @package _global_
+# Phase 2 — MNIST smoke test: 5 epoche su CPU, shape check + sanity.
+data_dim: 64
+image_size: 32
+in_channels: 1
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/exps/phase2-mnist-smoke
+  num_train_epochs: 5
+  per_device_train_batch_size: 64
+  learning_rate: 2e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: mnist
+  eval_num_samples: 4
+  save_steps: 99999
+  eval_steps: 99999
+  logging_steps: 50
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 10
+  t_q: 0.5
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone: null
+unet_backbone:
+  base_channels: 32
+  channel_multipliers: [1, 2, 4]
+  num_res_blocks: 2
+  time_embed_dim: 64
+  attention_resolutions: [8, 4]
+  bottleneck_channels: 64
+dit_backbone: null
+
+vq:
+  num_embeddings: 64
+  embedding_dim: 64
+  commitment_weight: 0.25
+  use_ema: true
+fsq: null
+
+stochastic_dequantizer:
+  sigma: 0.05
+residual_dequantizer: null

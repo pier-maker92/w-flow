@@ -1,0 +1,14 @@
+checkpoints/
+outputs/
+wandb/
+runs/
+*.pt
+*.safetensors
+*.ckpt
+*.wav
+*.png
+*.npz
+__pycache__/
+*.pyc
+*.egg-info/
+.hydra/

@@ -1,0 +1,54 @@
+# @package _global_
+# Phase 2 — MNIST 28x28, rectified flow con UNet velocity network.
+# t_q: null = nessun bottleneck VQ (plain RF). Step zero per verificare UNet.
+data_dim: 784
+image_size: 28
+in_channels: 1
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/exps/phase2-mnist-v1
+  num_train_epochs: 50
+  per_device_train_batch_size: 128
+  learning_rate: 2e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: mnist
+  eval_num_samples: 4
+  save_steps: 2000
+  eval_steps: 2000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: euler
+  num_steps: 50
+  t_q: null
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone: null
+unet_backbone:
+  base_channels: 64
+  channel_multipliers: [1, 2, 4]
+  num_res_blocks: 2
+  time_embed_dim: 128
+  attention_resolutions: [7]
+  bottleneck_channels: 256
+dit_backbone: null
+
+vq: null
+fsq: null
+
+stochastic_dequantizer: null
+residual_dequantizer: null

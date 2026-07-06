@@ -1,0 +1,56 @@
+# @package _global_
+# Phase 1 — 8-Gaussians, EMA + restart, 8 codici, stochastic, 200 epoche.
+# Scale-up della run EMA-8codes per vedere convergenza a lungo termine.
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/exps/phase1-gaussians-ema-200ep
+  num_train_epochs: 200
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 500
+  save_steps: 5000
+  eval_steps: 1000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: 100000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: 0.5
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+unet_backbone: null
+dit_backbone: null
+
+vq:
+  num_embeddings: 8
+  embedding_dim: 2
+  commitment_weight: 0.25
+  use_ema: true
+fsq: null
+
+stochastic_dequantizer:
+  sigma: 0.1
+residual_dequantizer: null

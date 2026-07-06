@@ -1,0 +1,4 @@
+# @package _global_
+# Exactly one quantizer config is non-null per experiment (unless use_velocity_quant=true).
+vq: null
+fsq: null

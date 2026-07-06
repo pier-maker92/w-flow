@@ -1,0 +1,5 @@
+# @package _global_
+# Exactly one dequantizer config is non-null per experiment
+# (both null when use_velocity_quant=true).
+stochastic_dequantizer: null   # Metodo A: z̃ = z_q + σε
+residual_dequantizer: null     # Metodo B: z̃ = (1-α)z_q + αx_tq  (bijective)

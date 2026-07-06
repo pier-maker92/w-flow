@@ -1,0 +1,32 @@
+[project]
+name = "flow_quant"
+version = "0.1.0"
+description = "Intermediate quantization in Flow Matching trajectories"
+requires-python = ">=3.11"
+
+dependencies = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "numpy==1.26.4",
+    "hydra-core",
+    "omegaconf",
+    "transformers==5.0.0",
+    "scikit-learn",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+training = [
+    "wandb",
+    "safetensors",
+    "accelerate==1.13.0",
+    "datasets==4.1.0",
+]
+eval = [
+    "torchmetrics[image]",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["modules*", "data*", "evaluation*"]
+exclude = ["configs*", "checkpoints*"]

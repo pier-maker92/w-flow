@@ -1,0 +1,14 @@
+defaults:
+  - defaults/train
+  - defaults/backbone
+  - defaults/flow
+  - defaults/quantizer
+  - defaults/dequantizer
+  - _self_
+  - settings: null
+
+# Global parameters — null here, real values in settings/exps/*.yaml
+data_dim: null         # latent/feature dim at the quantization bottleneck
+image_size: null       # spatial resolution (Phase 2-3 only; null for Phase 1)
+in_channels: null      # image channels (Phase 2-3 only; null for Phase 1)
+use_velocity_quant: false

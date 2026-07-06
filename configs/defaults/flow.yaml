@@ -1,0 +1,8 @@
+# @package _global_
+flow:
+  flow_type: null    # "rectified" | "ot_cfm"
+  solver: null       # "euler" | "midpoint" | "rk4"
+  num_steps: null    # ODE steps at inference
+  t_q: null          # quantization waypoint time in (0, 1); null disables bottleneck
+  source_std: null   # std of source distribution p0 (typically 1.0)
+  commitment_weight: null  # weight on VQ commitment loss in total loss

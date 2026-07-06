@@ -1,0 +1,58 @@
+# @package _global_
+# Phase 1 — Velocity Quantization variant (Section 4 of the research plan).
+# No spatial bottleneck; VQ is applied to the velocity field v_theta(x_t, t).
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: true
+
+training:
+  output_dir: checkpoints/exps/phase1-velocity-quant
+  num_train_epochs: 200
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 2000
+  save_steps: 1000
+  eval_steps: 500
+  logging_steps: 50
+  bf16: false
+  fp16: false
+  report_to: wandb
+  wandb_project: flow-quant
+  wandb_run_name: phase1-gaussians-velocity-quant
+  gaussians_n: 100000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: null
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+unet_backbone: null
+dit_backbone: null
+
+# Quantizer for velocity space: init scale matches velocity magnitude ≈ radius of x1
+vq:
+  num_embeddings: 64
+  embedding_dim: 2
+  commitment_weight: 0.25
+  use_ema: true
+  embedding_init_scale: 5.0
+fsq: null
+
+# No spatial dequantizer for velocity quant
+stochastic_dequantizer: null
+residual_dequantizer: null

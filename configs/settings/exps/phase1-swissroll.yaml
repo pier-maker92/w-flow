@@ -1,0 +1,55 @@
+# @package _global_
+# Phase 1 — Swiss Roll 2D, residual dequantizer (Metodo B).
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/exps/phase1-swissroll
+  num_train_epochs: 200
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: swissroll
+  eval_num_samples: 2000
+  save_steps: 1000
+  eval_steps: 500
+  logging_steps: 50
+  bf16: false
+  fp16: false
+  report_to: wandb
+  wandb_project: flow-quant
+  wandb_run_name: phase1-swissroll-vq-residual
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: 0.1
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: 0.5
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+unet_backbone: null
+dit_backbone: null
+
+vq:
+  num_embeddings: 64
+  embedding_dim: 2
+  commitment_weight: 0.25
+  use_ema: false
+fsq: null
+
+stochastic_dequantizer: null
+residual_dequantizer:
+  alpha: 0.5

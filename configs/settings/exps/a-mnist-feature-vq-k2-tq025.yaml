@@ -1,0 +1,64 @@
+# @package _global_
+# MNIST feature-VQ, K=2, t_q=0.25
+data_dim: 784
+image_size: 28
+in_channels: 1
+use_velocity_quant: false
+
+training:
+  output_dir: checkpoints/exps/a-mnist-feature-vq-k2-tq025
+  num_train_epochs: 50
+  per_device_train_batch_size: 128
+  learning_rate: 2e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: mnist
+  eval_num_samples: 4
+  save_steps: 10000
+  eval_steps: 10000
+  logging_steps: 100
+  bf16: true
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: null
+
+flow:
+  flow_type: rectified
+  solver: euler
+  num_steps: 50
+  t_q: 0.25
+  quant_target: feature
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone: null
+unet_backbone:
+  base_channels: 64
+  channel_multipliers: [1, 2, 4]
+  num_res_blocks: 2
+  time_embed_dim: 128
+  attention_resolutions: [7]
+  bottleneck_channels: 256
+  use_x0_cond: true
+  use_bottleneck_vq: false
+dit_backbone: null
+
+vq:
+  num_embeddings: 2
+  embedding_dim: 256
+  commitment_weight: 0.25
+  use_ema: true
+  embedding_init_scale: 0.5
+fsq: null
+
+stochastic_dequantizer: null
+residual_dequantizer: null
+linear_dequantizer:
+  in_dim: 256
+  out_dim: 784
