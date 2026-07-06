@@ -17,6 +17,7 @@ from .flow.rectified_flow import RectifiedFlow
 from .flow.solver import ODESolver
 from .flow.velocity_quant import VelocityQuantizedFlow
 from .flow.velocity_bsq import VelocityBSQWrapper
+from .autoencoder.velocity_ae import VelocityAutoencoder
 
 
 class FlowQuant(nn.Module):
@@ -68,6 +69,15 @@ class FlowQuant(nn.Module):
                 self.dequantizer = ResidualDequantizer(config.residual_dequantizer_config)
             elif config.linear_dequantizer_config is not None:
                 self.dequantizer = LinearDequantizer(config.linear_dequantizer_config)
+
+        # Velocity Autoencoder
+        self.velocity_ae: Optional[nn.Module] = None
+        if config.velocity_ae_config is not None:
+            self.velocity_ae = VelocityAutoencoder(
+                config.velocity_ae_config,
+                in_channels=config.in_channels if config.in_channels is not None else 1,
+                image_size=config.image_size if config.image_size is not None else 28
+            )
 
         # Flow loss and solver
         self.flow = RectifiedFlow()
@@ -145,6 +155,8 @@ class FlowQuant(nn.Module):
         x_tq = (1 - t_q) * x0 + t_q * x1
         quant_target = self.config.flow_config.quant_target
         t_q_vec = x0.new_full((x0.shape[0],), t_q)
+        
+        ae_loss = None
 
         if quant_target == "velocity":
             cond = x0_cond if (self._use_x0_cond and x0_cond is not None) else None
@@ -153,9 +165,23 @@ class FlowQuant(nn.Module):
             quant_out = self.quantizer(v_tq_flat)
             if self.dequantizer is not None:
                 d_out = self.dequantizer(quant_out.z_q)
-                x_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
+                v_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
             else:
-                x_tq_hat = quant_out.z_q.reshape(x_tq.shape)
+                v_tq_hat = quant_out.z_q.reshape(x_tq.shape)
+            x_tq_hat = x0 + t_q * v_tq_hat
+
+        elif quant_target == "velocity_ae":
+            assert self.velocity_ae is not None
+            v_gt = x1 - x0
+            # Ensure v_gt has image shape [B, C, H, W]
+            v_gt_spatial = v_gt.reshape(x_tq.shape) if v_gt.ndim <= 2 else v_gt
+            z = self.velocity_ae.encode(v_gt_spatial)
+            quant_out = self.quantizer(z)
+            v_tq_hat = self.velocity_ae.decode(quant_out.z_q)
+            v_tq_hat = v_tq_hat.reshape(x_tq.shape)
+            x_tq_hat = x0 + t_q * v_tq_hat
+            # Compute AE reconstruction loss
+            ae_loss = torch.nn.functional.mse_loss(v_tq_hat, v_gt_spatial)
 
         elif quant_target == "feature":
             t_emb = self.backbone.time_embed(t_q_vec)
@@ -165,7 +191,8 @@ class FlowQuant(nn.Module):
             z_pool = z.mean(dim=[2, 3])
             quant_out = self.quantizer(z_pool)
             dequant_out = self.dequantizer(quant_out.z_q)
-            x_tq_hat = dequant_out.x_tq_hat.reshape(x_tq.shape)
+            v_tq_hat = dequant_out.x_tq_hat.reshape(x_tq.shape)
+            x_tq_hat = x0 + t_q * v_tq_hat
 
         else:  # "x_tq" — VQ in data space
             x_tq_vq = x_tq.reshape(x_tq.shape[0], -1) if x_tq.ndim > 2 else x_tq
@@ -204,6 +231,8 @@ class FlowQuant(nn.Module):
         commitment_loss = quant_out.commitment_loss
         codebook_loss = quant_out.codebook_loss
         total = total_fm_loss
+        if ae_loss is not None:
+            total = total + ae_loss
         if commitment_loss is not None:
             total = total + self.config.flow_config.commitment_weight * commitment_loss
         if codebook_loss is not None:
@@ -214,6 +243,7 @@ class FlowQuant(nn.Module):
             fm_loss=total_fm_loss,
             commitment_loss=commitment_loss,
             codebook_loss=codebook_loss,
+            ae_loss=ae_loss,
             quantizer_output=quant_out,
         )
 
@@ -253,7 +283,8 @@ class FlowQuant(nn.Module):
             z_pool = z.mean(dim=[2, 3])
             q_out = self.quantizers[i](z_pool)
             d_out = self.dequantizers[i](q_out.z_q)
-            x_hats.append(d_out.x_tq_hat.reshape(x_tq.shape))
+            v_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
+            x_hats.append(x0 + tq * v_tq_hat)
             if q_out.commitment_loss is not None:
                 all_commit.append(q_out.commitment_loss)
             if q_out.codebook_loss is not None:
@@ -341,8 +372,19 @@ class FlowQuant(nn.Module):
                 q_out = self.quantizer(v_flat)
                 if self.dequantizer is not None:
                     d_out = self.dequantizer(q_out.z_q)
-                    return d_out.x_tq_hat.reshape(x.shape)
-                return q_out.z_q.reshape(x.shape)
+                    v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
+                else:
+                    v_tq_hat = q_out.z_q.reshape(x.shape)
+                return x0 + t_q * v_tq_hat
+            elif quant_target == "velocity_ae":
+                t_vec = x.new_full((x.shape[0],), t_q)
+                v_pred = velocity_fn(x, t_vec)
+                v_pred_spatial = v_pred.reshape(x.shape) if v_pred.ndim <= 2 else v_pred
+                z = self.velocity_ae.encode(v_pred_spatial)
+                q_out = self.quantizer(z)
+                v_tq_hat = self.velocity_ae.decode(q_out.z_q)
+                v_tq_hat = v_tq_hat.reshape(x.shape)
+                return x0 + t_q * v_tq_hat
             elif quant_target == "feature":
                 t_vec = x.new_full((x.shape[0],), t_q)
                 t_emb = self.backbone.time_embed(t_vec)
@@ -352,7 +394,8 @@ class FlowQuant(nn.Module):
                 z_pool = z.mean(dim=[2, 3])
                 q_out = self.quantizer(z_pool)
                 d_out = self.dequantizer(q_out.z_q)
-                return d_out.x_tq_hat.reshape(x.shape)
+                v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
+                return x0 + t_q * v_tq_hat
             else:  # "x_tq"
                 x_flat = x.reshape(x.shape[0], -1) if x.ndim > 2 else x
                 q_out = self.quantizer(x_flat)
@@ -390,7 +433,8 @@ class FlowQuant(nn.Module):
                 z_pool = z.mean(dim=[2, 3])
                 q_out = self.quantizers[i](z_pool)
                 d_out = self.dequantizers[i](q_out.z_q)
-                return d_out.x_tq_hat.reshape(x.shape)
+                v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
+                return x0 + tq * v_tq_hat
             return qfn
 
         quantize_fns = [make_qfn(i, tq) for i, tq in enumerate(t_qs)]

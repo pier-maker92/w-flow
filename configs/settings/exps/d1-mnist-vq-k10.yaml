@@ -17,7 +17,7 @@ training:
   eval_num_samples: 4
   save_steps: 10000
   eval_steps: 10000
-  logging_steps: 100
+  logging_steps: 10
   bf16: true
   fp16: false
   report_to: null
@@ -35,7 +35,7 @@ flow:
   solver: euler
   num_steps: 50
   t_q: 0.5
-  quant_target: feature
+  quant_target: velocity_ae
   source_std: 1.0
   commitment_weight: 0.25
 
@@ -51,6 +51,10 @@ unet_backbone:
   use_bottleneck_vq: false
 dit_backbone: null
 
+velocity_ae_config:
+  hidden_dim: 64
+  bottleneck_dim: 256
+
 vq:
   num_embeddings: 10
   embedding_dim: 256
@@ -62,6 +66,4 @@ bsq: null
 
 stochastic_dequantizer: null
 residual_dequantizer: null
-linear_dequantizer:
-  in_dim: 256
-  out_dim: 784
+linear_dequantizer: null

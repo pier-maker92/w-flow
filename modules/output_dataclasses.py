@@ -32,4 +32,5 @@ class FlowOutput(ModelOutput):
     fm_loss: Optional[torch.FloatTensor] = None            # flow matching MSE
     commitment_loss: Optional[torch.FloatTensor] = None    # VQ commitment loss
     codebook_loss: Optional[torch.FloatTensor] = None      # VQ codebook loss
+    ae_loss: Optional[torch.FloatTensor] = None            # Autoencoder reconstruction loss
     quantizer_output: Optional[QuantizerOutput] = None

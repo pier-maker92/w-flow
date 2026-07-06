@@ -3,6 +3,11 @@ from typing import Optional, List
 
 
 @dataclass(kw_only=True)
+class VelocityAEConfig:
+    hidden_dim: int = 64
+    bottleneck_dim: int = 256
+
+@dataclass(kw_only=True)
 class MLPBackboneConfig:
     hidden_dim: int
     num_layers: int
@@ -131,6 +136,8 @@ class FlowQuantConfig:
 
     flow_config: FlowConfig
     training_config: TrainingConfig
+
+    velocity_ae_config: Optional[VelocityAEConfig] = None
 
     # Backbone — exactly one non-null
     mlp_backbone_config: Optional[MLPBackboneConfig]

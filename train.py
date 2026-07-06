@@ -22,13 +22,16 @@ class FlowQuantTrainer(Trainer):
         outputs: FlowOutput = model(x1=x1)
         loss = outputs.loss
         if self.state.global_step % self.args.logging_steps == 0:
-            self.log({
+            log_dict = {
                 "fm_loss": outputs.fm_loss.item() if outputs.fm_loss is not None else 0.0,
                 "commitment_loss": outputs.commitment_loss.item() if outputs.commitment_loss is not None else 0.0,
                 "perplexity": outputs.quantizer_output.perplexity.item()
                     if outputs.quantizer_output is not None and outputs.quantizer_output.perplexity is not None
                     else 0.0,
-            })
+            }
+            if outputs.ae_loss is not None:
+                log_dict["ae_loss"] = outputs.ae_loss.item()
+            self.log(log_dict)
         return (loss, outputs) if return_outputs else loss
 
 

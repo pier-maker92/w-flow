@@ -17,7 +17,7 @@ class VectorQuantizer(nn.Module):
             else 1.0 / config.num_embeddings
         nn.init.uniform_(self.embedding.weight, -scale, scale)
         if config.use_ema:
-            self.register_buffer("ema_cluster_size", torch.zeros(config.num_embeddings))
+            self.register_buffer("ema_cluster_size", torch.ones(config.num_embeddings))
             self.register_buffer("ema_embed_avg", self.embedding.weight.data.clone())
 
     def forward(self, z: torch.FloatTensor) -> QuantizerOutput:
@@ -78,6 +78,7 @@ class VectorQuantizer(nn.Module):
         num_dead = int(dead.sum().item())
         if num_dead > 0:
             rand_idx = torch.randint(0, flat.shape[0], (num_dead,), device=flat.device)
+            avg_size = max(self.ema_cluster_size.sum().item() / K, 1.0)
             self.embedding.weight.data[dead] = flat[rand_idx]
-            self.ema_cluster_size[dead] = 1.0
-            self.ema_embed_avg[dead] = flat[rand_idx]
+            self.ema_cluster_size[dead] = avg_size
+            self.ema_embed_avg[dead] = flat[rand_idx] * avg_size

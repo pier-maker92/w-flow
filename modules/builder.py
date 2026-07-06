@@ -5,7 +5,7 @@ from .configs import (
     MLPBackboneConfig, UNetBackboneConfig, DiTBackboneConfig,
     VQConfig, FSQConfig, BSQConfig,
     StochasticDequantizerConfig, ResidualDequantizerConfig,
-    LinearDequantizerConfig,
+    LinearDequantizerConfig, VelocityAEConfig,
 )
 from .flow_model import FlowQuant
 
@@ -36,6 +36,8 @@ def build_model(cfg_dict: dict[str, Any]) -> FlowQuant:
     _ld_raw = cfg_dict.get("linear_dequantizer")
     linear_dequantizer_config = LinearDequantizerConfig(**_ld_raw) if _ld_raw else None
 
+    velocity_ae_config = _optional(cfg_dict, "velocity_ae_config", VelocityAEConfig) if "velocity_ae_config" in cfg_dict else None
+
     config = FlowQuantConfig(
         data_dim=cfg_dict["data_dim"],
         image_size=cfg_dict["image_size"],
@@ -54,5 +56,6 @@ def build_model(cfg_dict: dict[str, Any]) -> FlowQuant:
         stochastic_dequantizer_config=stochastic_dequantizer_config,
         residual_dequantizer_config=residual_dequantizer_config,
         linear_dequantizer_config=linear_dequantizer_config,
+        velocity_ae_config=velocity_ae_config,
     )
     return FlowQuant(config=config)
