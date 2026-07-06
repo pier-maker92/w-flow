@@ -45,7 +45,12 @@ def main() -> None:
     model = load_model(args.checkpoint, device)
     cfg = model.config
 
-    x0 = torch.randn(args.n_samples, cfg.data_dim, device=device) * cfg.flow_config.source_std
+    if cfg.image_size is not None and cfg.in_channels is not None:
+        shape = (args.n_samples, cfg.in_channels, cfg.image_size, cfg.image_size)
+    else:
+        shape = (args.n_samples, cfg.data_dim)
+    
+    x0 = torch.randn(*shape, device=device) * cfg.flow_config.source_std
 
     with torch.no_grad():
         out = model.sample(
