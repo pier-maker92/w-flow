@@ -281,19 +281,25 @@ class FlowQuant(nn.Module):
         t_qs: List[float] = self.config.flow_config.waypoints()
         ndim_m1 = x0.ndim - 1
 
-        # --- compute x̂ at each waypoint via ground-truth interpolation ---
+        # --- compute x_hat at each waypoint accumulatively ---
         x_hats: List[torch.Tensor] = []
         all_commit: List[torch.Tensor] = []
         all_codebook: List[torch.Tensor] = []
         all_ae: List[torch.Tensor] = []
 
+        current_x = x0
+        current_t = 0.0
+
         for i, tq in enumerate(t_qs):
-            x_tq = (1 - tq) * x0 + tq * x1
             quant_target = self.config.flow_config.quant_target
             
+            # Ground truth velocity from current_x to x1
+            v_gt_remaining = (x1 - current_x) / (1.0 - current_t)
+
             if quant_target == "feature":
                 t_q_vec = x0.new_full((x0.shape[0],), tq)
                 t_emb = self.backbone.time_embed(t_q_vec)
+                x_tq = current_x + (tq - current_t) * v_gt_remaining
                 x_aug = (torch.cat([x_tq, x0_cond], dim=1)
                          if (self._use_x0_cond and x0_cond is not None) else x_tq)
                 z, _ = self.backbone._encode(x_aug, t_emb)
@@ -301,21 +307,27 @@ class FlowQuant(nn.Module):
                 q_out = self.quantizers[i](z_pool)
                 d_out = self.dequantizers[i](q_out.z_q)
                 v_tq_hat = d_out.x_tq_hat.reshape(x_tq.shape)
-                x_hats.append(x0 + tq * v_tq_hat)
+                
+                current_x = current_x + (tq - current_t) * v_tq_hat
+                x_hats.append(current_x)
+                current_t = tq
             elif quant_target == "velocity_ae":
-                v_gt = x1 - x0
-                v_gt_spatial = v_gt.reshape(x_tq.shape) if v_gt.ndim <= 2 else v_gt
+                v_gt_spatial = v_gt_remaining.reshape(current_x.shape) if v_gt_remaining.ndim <= 2 else v_gt_remaining
                 ae = self.velocity_ae
                 z = ae.encode(v_gt_spatial)
                 q_out = self.quantizers[i](z)
                 v_tq_hat = ae.decode(q_out.z_q)
-                v_tq_hat = v_tq_hat.reshape(x_tq.shape)
-                x_hats.append(x0 + tq * v_tq_hat)
+                v_tq_hat = v_tq_hat.reshape(current_x.shape)
+                
+                current_x = current_x + (tq - current_t) * v_tq_hat
+                x_hats.append(current_x)
+                current_t = tq
                 
                 v_pred_ae = ae.decode(z)
-                v_pred_ae = v_pred_ae.reshape(v_gt.shape)
-                ae_loss = (v_pred_ae - v_gt).pow(2).mean()
+                v_pred_ae = v_pred_ae.reshape(v_gt_remaining.shape)
+                ae_loss = (v_pred_ae - v_gt_remaining).pow(2).mean()
                 all_ae.append(ae_loss)
+                
             if q_out.commitment_loss is not None:
                 all_commit.append(q_out.commitment_loss)
             if q_out.codebook_loss is not None:
@@ -464,6 +476,8 @@ class FlowQuant(nn.Module):
             t_qs = []
         quant_target = self.config.flow_config.quant_target
 
+        prev_state = {"x": x0, "t": 0.0}
+
         def make_qfn(i: int, tq: float) -> Callable:
             def qfn(x: torch.Tensor) -> torch.Tensor:
                 if quant_target == "feature":
@@ -475,7 +489,12 @@ class FlowQuant(nn.Module):
                     q_out = self.quantizers[i](z_pool)
                     d_out = self.dequantizers[i](q_out.z_q)
                     v_tq_hat = d_out.x_tq_hat.reshape(x.shape)
-                    return x0 + tq * v_tq_hat
+                    
+                    dt = tq - prev_state["t"]
+                    x_hat = prev_state["x"] + dt * v_tq_hat
+                    prev_state["x"] = x_hat
+                    prev_state["t"] = tq
+                    return x_hat
                 elif quant_target == "velocity_ae":
                     t_vec = x.new_full((x.shape[0],), tq)
                     v_pred = velocity_fn(x, t_vec)
@@ -485,7 +504,12 @@ class FlowQuant(nn.Module):
                     q_out = self.quantizers[i](z)
                     v_tq_hat = ae.decode(q_out.z_q)
                     v_tq_hat = v_tq_hat.reshape(x.shape)
-                    return x0 + tq * v_tq_hat
+                    
+                    dt = tq - prev_state["t"]
+                    x_hat = prev_state["x"] + dt * v_tq_hat
+                    prev_state["x"] = x_hat
+                    prev_state["t"] = tq
+                    return x_hat
                 else:
                     return x
             return qfn
