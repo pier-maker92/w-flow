@@ -40,28 +40,21 @@ from data.toy_2d import GaussiansDataset
 # ---------------------------------------------------------------------------
 
 def load_model(exp_dir: str, device: torch.device) -> tuple:
+    import json
     exp_dir = Path(exp_dir)
 
-    # Hydra config
-    cfg_path = exp_dir / "hydra" / ".hydra" / "config.yaml"
-    cfg = OmegaConf.load(cfg_path)
-    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+    cfg_path = exp_dir / "config.json"
+    with open(cfg_path) as f:
+        cfg_dict = json.load(f)
 
     # Build model skeleton
     model = build_model(cfg_dict)
     model.eval()
 
-    # Find latest checkpoint
-    ckpts = sorted(exp_dir.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
-    if not ckpts:
-        raise FileNotFoundError(f"No checkpoint found in {exp_dir}")
-    ckpt_dir = ckpts[-1]
-    print(f"Loading checkpoint: {ckpt_dir}")
-
-    # Load weights (safetensors)
+    ckpt = exp_dir / "model.safetensors"
     from safetensors.torch import load_file
-    state = load_file(ckpt_dir / "model.safetensors")
-    model.load_state_dict(state)
+    state = load_file(ckpt)
+    model.load_state_dict(state, strict=True)
     model.to(device)
 
     return model, cfg_dict
