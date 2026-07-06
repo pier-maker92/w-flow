@@ -50,10 +50,17 @@ class BinarySphericalQuantizer(nn.Module):
         # Commitment loss: push z_hat toward z_q (angular alignment)
         commitment_loss = F.mse_loss(z_hat, z_q.detach())
 
+        # Compute number of unique codes in the batch
+        # b has shape [B, dim] where B is batch size
+        # We can find the number of unique rows
+        b_flat = b.view(b.size(0), -1)
+        unique_codes = torch.unique(b_flat.cpu(), dim=0).size(0)
+        perplexity = torch.tensor(float(unique_codes), device=z.device)
+
         return QuantizerOutput(
             z_q=z_q_out,
             commitment_loss=commitment_loss,
             codebook_loss=None,
             indices=None,
-            perplexity=None,
+            perplexity=perplexity,
         )
