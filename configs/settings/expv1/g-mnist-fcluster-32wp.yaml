@@ -1,0 +1,72 @@
+# @package _global_
+# Experiment G-MNIST — MNIST, feature-cluster gravity, K=32 waypoints at t=0.5.
+# Fixed waypoint count (no merge analysis): 32 clusters, the count the 60-deg merge
+# sweep collapsed the 128-centroid run down to.
+data_dim: 784
+image_size: 28
+in_channels: 1
+use_velocity_quant: false
+use_velocity_bsq: false
+velocity_bsq_threshold: 0.75
+
+training:
+  output_dir: checkpoints/exps/g-mnist-fcluster-32wp
+  num_train_epochs: 30
+  per_device_train_batch_size: 256
+  learning_rate: 2e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: mnist
+  eval_num_samples: 4
+  save_steps: 50000
+  eval_steps: 50000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: null
+  gaussians_radius: null
+  gaussians_std: null
+  swissroll_noise: null
+  warmstart_backbone_checkpoint: null
+  freeze_backbone: false
+  merge_analysis: false
+
+flow:
+  flow_type: rectified
+  solver: euler
+  num_steps: 50
+  t_q: null
+  t_qs: [0.50]
+  quant_target: x_tq
+  source_std: 1.0
+  commitment_weight: 0.0
+
+mlp_backbone: null
+unet_backbone:
+  base_channels: 64
+  channel_multipliers: [1, 2, 4]
+  num_res_blocks: 2
+  time_embed_dim: 128
+  attention_resolutions: [7]
+  bottleneck_channels: 256
+  use_x0_cond: false
+dit_backbone: null
+
+vq: null
+fsq: null
+bsq: null
+stochastic_dequantizer: null
+residual_dequantizer: null
+linear_dequantizer: null
+
+feature_cluster:
+  - n_clusters: 32
+    noise_std: 0.5
+    ema_decay: 0.99
+    project_centroids: true
+    gravity_mode: true
+    gravity_softening: 0.01

@@ -136,6 +136,13 @@ class TrainingConfig:
     warmstart_backbone_checkpoint: Optional[str] = None
     # freeze backbone (requires_grad=False) before optimizer creation
     freeze_backbone: bool = False
+    # Post-hoc waypoint merge analysis (feature-cluster gravity runs): estimate the
+    # optimal number of waypoints by greedily merging low-mass centroids into higher-mass
+    # angular neighbours when their flow-velocity deviation is below a threshold.
+    merge_analysis: bool = False
+    merge_thresholds_deg: Optional[List[float]] = None  # angular thresholds to sweep (deg)
+    merge_k_neighbors: int = 6  # neighbours considered per centroid on the hypersphere
+    merge_target_deg: float = 30.0  # threshold highlighted in the report/plot
 
 
 @dataclass(kw_only=True)

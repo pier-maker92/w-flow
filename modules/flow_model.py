@@ -446,16 +446,21 @@ class FlowQuant(nn.Module):
         last_assignments: torch.LongTensor = None  # assignments from last waypoint (for x1 norm)
 
         for i, tq in enumerate(t_qs):
-            # Interpolation at t_q
-            x_tq = (1 - tq) * x0 + tq * x1  # [B, D]
-            x_tq_hat, assignments, commit_loss = self.feature_clusters[i](x_tq, x1)
-            x_hats.append(x_tq_hat)
+            # Interpolation at t_q. Centroids live in flattened data space so image
+            # inputs ([B,C,H,W]) are flattened for clustering, then reshaped back.
+            x_tq = (1 - tq) * x0 + tq * x1  # [B, ...]
+            x_tq_flat = x_tq.reshape(x_tq.shape[0], -1)
+            x1_flat = x1.reshape(x1.shape[0], -1)
+            x_tq_hat_flat, assignments, commit_loss = self.feature_clusters[i](x_tq_flat, x1_flat)
+            x_hats.append(x_tq_hat_flat.reshape(x_tq.shape))
             all_assignments.append(assignments)
             last_assignments = assignments
             all_commit.append(commit_loss)
 
         # Normalize x1 using the last waypoint's cluster assignments
-        x1_norm = self.feature_clusters[-1].normalize_x1(x1, last_assignments)
+        x1_norm = self.feature_clusters[-1].normalize_x1(
+            x1.reshape(x1.shape[0], -1), last_assignments
+        ).reshape(x1.shape)
 
         # --- FM loss per segment ---
         gravity_mode = any(getattr(fc.config, "gravity_mode", False) for fc in self.feature_clusters)
@@ -555,13 +560,15 @@ class FlowQuant(nn.Module):
         disable_quantization: bool = False,
         force_waypoints: Optional[list[int]] = None,
         gravity_g: float = 0.0,
+        gravity_clusters: Optional[list[int]] = None,
+        t_start: float = 0.0,
     ) -> SolverOutput:
         steps = num_steps if num_steps is not None else self.config.flow_config.num_steps
         velocity_fn = self._make_velocity_fn(x0)
 
         if self._uses_feature_cluster and not disable_quantization:
             return self._sample_with_feature_cluster(
-                x0, velocity_fn, steps, return_trajectory, force_waypoints, gravity_g
+                x0, velocity_fn, steps, return_trajectory, force_waypoints, gravity_g, gravity_clusters, t_start
             )
 
         if self._is_multi:
@@ -695,6 +702,8 @@ class FlowQuant(nn.Module):
         return_trajectory: bool,
         force_waypoints: Optional[list[int]] = None,
         gravity_g: float = 0.0,
+        gravity_clusters: Optional[list[int]] = None,
+        t_start: float = 0.0,
     ) -> SolverOutput:
         """Inference with feature-cluster waypoints.
 
@@ -760,7 +769,9 @@ class FlowQuant(nn.Module):
             quantize_fns=quantize_fns,
             return_trajectory=return_trajectory,
             gravity_g=gravity_g,
-            feature_clusters=fc_modules if gravity_g > 0 else None,
+            feature_clusters=fc_modules,
+            gravity_clusters=gravity_clusters,
+            t_start=t_start,
         )
 
         # Denormalize final output using last waypoint's cluster stats

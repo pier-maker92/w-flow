@@ -114,6 +114,28 @@ def main(cfg: DictConfig) -> None:
     trainer.save_model(output_dir)
     log.info(f"Training complete. Final model saved to {output_dir}")
 
+    # Post-hoc waypoint-merge analysis (feature-cluster gravity runs).
+    # Non-fatal: the checkpoint is already saved above, so a bug here must not
+    # mark the run as failed.
+    if training_cfg_dict.get("merge_analysis"):
+        try:
+            from evaluation.waypoint_merge import run_merge_sweep
+            agent_dir = os.path.join(
+                os.environ.get("SCRATCH", "."), "agente", "reports",
+                "waypoint_merge", Path(output_dir).name,
+            )
+            log.info(f"Running waypoint-merge analysis -> {agent_dir}")
+            res = run_merge_sweep(
+                model=trainer.model,
+                out_dir=agent_dir,
+                thresholds_deg=training_cfg_dict.get("merge_thresholds_deg"),
+                k_neighbors=training_cfg_dict.get("merge_k_neighbors", 6),
+                target_threshold_deg=training_cfg_dict.get("merge_target_deg", 30.0),
+            )
+            log.info(f"Merge sweep K_eff by threshold: {res['k_eff_by_threshold']}")
+        except Exception:
+            log.exception("waypoint-merge analysis failed (checkpoint is saved; re-run offline)")
+
 
 if __name__ == "__main__":
     main()

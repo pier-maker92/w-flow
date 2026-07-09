@@ -29,6 +29,8 @@ class ODESolver:
         return_trajectory: bool = False,
         gravity_g: float = 0.0,
         feature_clusters: Optional[List] = None,
+        gravity_clusters: Optional[List[int]] = None,
+        t_start: float = 0.0,
     ) -> SolverOutput:
         """Integrate dx/dt = v_θ(x, t) from t=0 to t=1.
 
@@ -46,8 +48,12 @@ class ODESolver:
             waypoints = []
 
         applied = [False] * len(waypoints)
+        for i, (tq, _) in enumerate(waypoints):
+            if tq <= t_start + 1e-5:
+                applied[i] = True
+                
         x = x0.clone()
-        t = 0.0
+        t = t_start
 
         traj = [x.clone()] if return_trajectory else None
 
@@ -87,9 +93,10 @@ class ODESolver:
                         eps = getattr(fc.config, "gravity_softening", 0.01)
                         
                         # Calcola le distanze da tutti i centroidi
-                        # x: [B, D], centroids: [K, D]
+                        # x_flat: [B, D], centroids: [K, D]
+                        x_flat = x.reshape(x.shape[0], -1) if x.ndim > 2 else x
                         # dist_sq: [B, K]
-                        diff = centroids.unsqueeze(0) - x.unsqueeze(1) # [B, K, D]
+                        diff = centroids.unsqueeze(0) - x_flat.unsqueeze(1) # [B, K, D]
                         dist_sq = (diff ** 2).sum(dim=-1)
                         dist = torch.sqrt(dist_sq.clamp(min=1e-8))
                         
@@ -98,12 +105,27 @@ class ODESolver:
                         direction = diff / dist.unsqueeze(-1)
                         magnitude = gravity_g * masses.unsqueeze(0) / (dist_sq + eps) # [B, K]
                         
+                        if gravity_clusters is not None:
+                            mask = torch.zeros(magnitude.shape[1], device=magnitude.device, dtype=torch.bool)
+                            mask[gravity_clusters] = True
+                            magnitude = magnitude * mask.unsqueeze(0)
+                            
                         force = (magnitude.unsqueeze(-1) * direction).sum(dim=1) # [B, D]
-                        gravity_v = force
+                        gravity_v = force.reshape(x.shape)
 
                 def get_v(x_curr, t_curr):
                     v = velocity_fn(x_curr, t_curr)
-                    return v + gravity_v
+                    if isinstance(gravity_v, float) and gravity_v == 0.0:
+                        return v
+                        
+                    v_flat = v.reshape(v.shape[0], -1)
+                    v_norm = torch.norm(v_flat, p=2, dim=1).view(-1, *([1] * (v.ndim - 1)))
+                    
+                    v_new = v + gravity_v
+                    v_new_flat = v_new.reshape(v_new.shape[0], -1)
+                    v_new_norm = torch.norm(v_new_flat, p=2, dim=1).view(-1, *([1] * (v.ndim - 1)))
+                    
+                    return v_new * (v_norm / v_new_norm.clamp(min=1e-8))
 
                 if self.method == "euler":
                     x = x + dt_step * get_v(x, t_vec)
@@ -129,7 +151,8 @@ class ODESolver:
             # Apply waypoint if we landed exactly on it
             for i, (tq, qfn) in enumerate(waypoints):
                 if not applied[i] and abs(t - tq) <= 1e-5:
-                    if gravity_g > 0:
+                    is_gravity_mode = feature_clusters is not None and getattr(feature_clusters[i].config, "gravity_mode", False)
+                    if is_gravity_mode:
                         # In gravity mode, we don't perform the hard jump. 
                         # We just run qfn(x) in case it's needed for state tracking, but keep x unchanged.
                         _ = qfn(x)
