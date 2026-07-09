@@ -77,6 +77,17 @@ class LinearDequantizerConfig:
 
 
 @dataclass(kw_only=True)
+class FeatureClusterConfig:
+    n_clusters: int          # K waypoints in feature space
+    noise_std: float = 1.0   # std of noise N(0, noise_std) around centroid
+    gravity_mode: bool = False # se True, disabilita l'interferenza dell'addestramento e traccia solo i centroidi
+    gravity_softening: float = 0.01 # epsilon per la stabilità 1/(d^2 + epsilon)
+    learnable_noise: bool = False  # se True, noise_std diventa il valore iniziale di un parametro addestrabile
+    ema_decay: float = 0.99  # decay for running centroid & normalization stats
+    project_centroids: bool = False  # se True, proietta i centroidi sull'ipercirconferenza di raggio t_q
+
+
+@dataclass(kw_only=True)
 class FlowConfig:
     flow_type: str          # "rectified" | "ot_cfm"
     solver: str             # "euler" | "midpoint" | "rk4"
@@ -159,6 +170,9 @@ class FlowQuantConfig:
     residual_dequantizer_config: Optional[ResidualDequantizerConfig]
     linear_dequantizer_config: Optional[LinearDequantizerConfig] = None
 
+    # Feature-space clustering waypoints (replaces VQ when set)
+    feature_cluster_configs: Optional[List[FeatureClusterConfig]] = None
+
     def __post_init__(self) -> None:
         n_backbones = sum(c is not None for c in [
             self.mlp_backbone_config, self.unet_backbone_config, self.dit_backbone_config
@@ -167,6 +181,20 @@ class FlowQuantConfig:
             raise ValueError(f"exactly one backbone config must be non-null; got {n_backbones}")
 
         _has_waypoints = bool(self.flow_config.waypoints())
+        _uses_feature_cluster = (self.feature_cluster_configs is not None
+                                 and len(self.feature_cluster_configs) > 0)
+
+        # Feature-cluster mode bypasses VQ/dequantizer entirely
+        if _uses_feature_cluster:
+            n_wps = len(self.flow_config.waypoints())
+            n_fc = len(self.feature_cluster_configs)
+            if n_wps != n_fc:
+                raise ValueError(
+                    f"feature_cluster_configs length ({n_fc}) must match "
+                    f"number of waypoints ({n_wps})"
+                )
+            return  # skip VQ / dequantizer validation
+
         n_quantizers = sum(c is not None for c in [self.vq_config, self.fsq_config, self.bsq_config])
         if n_quantizers > 1:
             raise ValueError("at most one quantizer config must be non-null")

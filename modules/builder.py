@@ -5,7 +5,7 @@ from .configs import (
     MLPBackboneConfig, UNetBackboneConfig, DiTBackboneConfig,
     VQConfig, FSQConfig, BSQConfig,
     StochasticDequantizerConfig, ResidualDequantizerConfig,
-    LinearDequantizerConfig, VelocityAEConfig,
+    LinearDequantizerConfig, VelocityAEConfig, FeatureClusterConfig,
 )
 from .flow_model import FlowQuant
 
@@ -44,6 +44,16 @@ def build_model(cfg_dict: dict[str, Any]) -> FlowQuant:
 
     velocity_ae_config = _optional(cfg_dict, "velocity_ae_config", "velocity_ae_config", VelocityAEConfig)
 
+    # Feature-cluster configs: list of dicts → list of FeatureClusterConfig
+    fc_raw = cfg_dict.get("feature_cluster") or cfg_dict.get("feature_cluster_configs")
+    feature_cluster_configs = None
+    if fc_raw is not None:
+        if isinstance(fc_raw, list):
+            feature_cluster_configs = [FeatureClusterConfig(**fc) for fc in fc_raw]
+        else:
+            # single dict → wrap in list
+            feature_cluster_configs = [FeatureClusterConfig(**fc_raw)]
+
     config = FlowQuantConfig(
         data_dim=cfg_dict["data_dim"],
         image_size=cfg_dict["image_size"],
@@ -63,5 +73,6 @@ def build_model(cfg_dict: dict[str, Any]) -> FlowQuant:
         residual_dequantizer_config=residual_dequantizer_config,
         linear_dequantizer_config=linear_dequantizer_config,
         velocity_ae_config=velocity_ae_config,
+        feature_cluster_configs=feature_cluster_configs,
     )
     return FlowQuant(config=config)

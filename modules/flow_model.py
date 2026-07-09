@@ -17,6 +17,7 @@ from .flow.rectified_flow import RectifiedFlow
 from .flow.solver import ODESolver
 from .flow.velocity_quant import VelocityQuantizedFlow
 from .flow.velocity_bsq import VelocityBSQWrapper
+from .flow.feature_cluster import FeatureClusterWaypoint
 from .autoencoder.velocity_ae import VelocityAutoencoder
 
 
@@ -33,15 +34,33 @@ class FlowQuant(nn.Module):
         else:
             self.backbone = DiTBackbone(config.dit_backbone_config, config.in_channels, config.image_size)
 
+        # Feature-cluster waypoints (new approach, replaces VQ when set)
+        fc_cfgs = config.feature_cluster_configs
+        self._uses_feature_cluster = False
+        if fc_cfgs is not None and len(fc_cfgs) > 0:
+            self._uses_feature_cluster = True
+            t_qs = config.flow_config.waypoints()
+            self.feature_clusters = nn.ModuleList([
+                FeatureClusterWaypoint(fc, config.data_dim, t_q=t_qs[i]) for i, fc in enumerate(fc_cfgs)
+            ])
+        else:
+            self.feature_clusters: Optional[nn.ModuleList] = None
+
         # Quantizer / dequantizer
         n_waypoints = len(config.flow_config.waypoints())
         self._is_multi = n_waypoints > 1
 
-        if self._is_multi:
-            # Multi-waypoint
-            quant_target = config.flow_config.quant_target
+        if self._uses_feature_cluster:
+            # Feature-cluster mode: no VQ / dequantizer needed
             self.quantizer: Optional[nn.Module] = None
             self.dequantizer: Optional[nn.Module] = None
+            self.quantizers: Optional[nn.ModuleList] = None
+            self.dequantizers: Optional[nn.ModuleList] = None
+        elif self._is_multi:
+            # Multi-waypoint (VQ-based)
+            quant_target = config.flow_config.quant_target
+            self.quantizer = None
+            self.dequantizer = None
             
             if quant_target == "feature":
                 assert config.vq_config is not None, "vq_config required for multi-waypoint"
@@ -117,7 +136,9 @@ class FlowQuant(nn.Module):
         x0 = torch.randn_like(x1) * cfg.source_std
         t = torch.rand(x1.shape[0], device=x1.device)
 
-        if self._is_multi:
+        if self._uses_feature_cluster:
+            return self._forward_with_feature_cluster(x0, x1, t, x0_cond=x0)
+        elif self._is_multi:
             return self._forward_with_multi_bottleneck(x0, x1, t, x0_cond=x0)
         elif self.config.use_velocity_quant or cfg.t_q is None:
             return self._forward_no_bottleneck(x0, x1, t)
@@ -393,6 +414,136 @@ class FlowQuant(nn.Module):
         )
 
     # ------------------------------------------------------------------
+    # Feature-cluster training forward
+    # ------------------------------------------------------------------
+
+    def _forward_with_feature_cluster(
+        self,
+        x0: torch.FloatTensor,
+        x1: torch.FloatTensor,
+        t: torch.FloatTensor,
+        x0_cond: torch.FloatTensor | None = None,
+    ) -> FlowOutput:
+        """Training forward for feature-space clustering waypoints.
+
+        For each waypoint t_q[i]:
+          1. Compute x_tq = (1-t_q)*x_src + t_q*x1  (interpolation)
+          2. Cluster via FeatureClusterWaypoint → assignments, x_tq_hat
+          3. Normalize x1 per-cluster
+
+        FM loss is computed per trajectory segment:
+          Pre-first-waypoint:  x0 → x_tq_hat_0  (straight line)
+          Between waypoints:   x_tq_hat_i → x_tq_hat_{i+1}
+          Post-last-waypoint:  x_tq_hat_last → x1_norm
+        """
+        t_qs: List[float] = self.config.flow_config.waypoints()
+        ndim_m1 = x0.ndim - 1
+
+        # --- compute waypoint targets at each t_q ---
+        x_hats: List[torch.Tensor] = []     # waypoint targets
+        all_assignments: List[torch.LongTensor] = []
+        all_commit: List[torch.Tensor] = []
+        last_assignments: torch.LongTensor = None  # assignments from last waypoint (for x1 norm)
+
+        for i, tq in enumerate(t_qs):
+            # Interpolation at t_q
+            x_tq = (1 - tq) * x0 + tq * x1  # [B, D]
+            x_tq_hat, assignments, commit_loss = self.feature_clusters[i](x_tq, x1)
+            x_hats.append(x_tq_hat)
+            all_assignments.append(assignments)
+            last_assignments = assignments
+            all_commit.append(commit_loss)
+
+        # Normalize x1 using the last waypoint's cluster assignments
+        x1_norm = self.feature_clusters[-1].normalize_x1(x1, last_assignments)
+
+        # --- FM loss per segment ---
+        gravity_mode = any(getattr(fc.config, "gravity_mode", False) for fc in self.feature_clusters)
+        
+        total_fm_loss = x0.new_zeros(())
+        
+        if gravity_mode:
+            # Standard continuous FM: rete impara le traiettorie naturali (x0 -> x1)
+            velocity_fn = self._make_velocity_fn(x0)
+            total_fm_loss, _ = self.flow.loss(x0, x1, t, velocity_fn)
+        else:
+            # Segments: [0, t_q0], [t_q0, t_q1], ..., [t_qN-1, 1]
+            # Sources:  [x0,      x_hat_0,       ..., x_hat_{N-1}]
+            # Targets at segment end: [x_hat_0, x_hat_1, ..., x1_norm]
+            t_lows  = [0.0] + list(t_qs)
+            t_highs = list(t_qs) + [1.0]
+            sources = [x0] + x_hats               # length N+1
+            targets = x_hats + [x1_norm]           # length N+1
+
+            for seg_idx, (t_lo, t_hi, x_src, x_tgt) in enumerate(
+                zip(t_lows, t_highs, sources, targets)
+            ):
+                is_last = (seg_idx == len(t_lows) - 1)
+                mask = (t >= t_lo) & (t <= t_hi if is_last else t < t_hi)
+                if not mask.any():
+                    continue
+
+                t_seg = t[mask]
+                x_src_seg = x_src[mask]
+                x_tgt_seg = x_tgt[mask]
+                dt = t_hi - t_lo
+
+                # Remap t to local [0, 1] within segment
+                s = (t_seg - t_lo) / dt
+                s_v = s.view(-1, *([1] * ndim_m1))
+
+                # Interpolation within segment
+                x_t = (1 - s_v) * x_src_seg + s_v * x_tgt_seg
+
+                # Velocity target = (x_tgt - x_src) / dt
+                v_target = (x_tgt_seg - x_src_seg) / dt
+
+                cond_seg = (x0_cond[mask]
+                            if (self._use_x0_cond and x0_cond is not None) else None)
+                v_pred = self.backbone(x_t, t_seg, x_cond=cond_seg)
+
+                total_fm_loss = total_fm_loss + (v_pred - v_target).pow(2).mean()
+
+        # Compute cluster perplexity from last waypoint assignments
+        import torch.nn.functional as F
+        total_K = sum(fc.config.n_clusters for fc in self.feature_clusters)
+        # Concatenate all assignments across waypoints for overall usage
+        all_indices = torch.cat(all_assignments, dim=0)
+        # Offset assignments for each waypoint so they map to unique bins
+        offset = 0
+        offset_assignments = []
+        for i, asgn in enumerate(all_assignments):
+            offset_assignments.append(asgn + offset)
+            offset += self.feature_clusters[i].config.n_clusters
+        all_offset = torch.cat(offset_assignments, dim=0)
+        encodings = F.one_hot(all_offset, total_K).float()
+        avg_probs = encodings.mean(0)
+        perplexity = (-avg_probs * (avg_probs + 1e-10).log()).sum().exp()
+
+        total_commit_loss = sum(all_commit) / len(all_commit) if all_commit else None
+
+        cluster_quant_out = QuantizerOutput(
+            z_q=None,
+            commitment_loss=total_commit_loss,
+            codebook_loss=None,
+            indices=last_assignments,
+            perplexity=perplexity,
+        )
+
+        total_loss = total_fm_loss
+        if total_commit_loss is not None and not gravity_mode:
+            total_loss = total_loss + self.config.flow_config.commitment_weight * total_commit_loss
+
+        return FlowOutput(
+            loss=total_loss,
+            fm_loss=total_fm_loss,
+            commitment_loss=total_commit_loss,
+            codebook_loss=None,
+            ae_loss=None,
+            quantizer_output=cluster_quant_out,
+        )
+
+    # ------------------------------------------------------------------
     # Inference
     # ------------------------------------------------------------------
 
@@ -402,9 +553,16 @@ class FlowQuant(nn.Module):
         num_steps: Optional[int] = None,
         return_trajectory: bool = False,
         disable_quantization: bool = False,
+        force_waypoints: Optional[list[int]] = None,
+        gravity_g: float = 0.0,
     ) -> SolverOutput:
         steps = num_steps if num_steps is not None else self.config.flow_config.num_steps
         velocity_fn = self._make_velocity_fn(x0)
+
+        if self._uses_feature_cluster and not disable_quantization:
+            return self._sample_with_feature_cluster(
+                x0, velocity_fn, steps, return_trajectory, force_waypoints, gravity_g
+            )
 
         if self._is_multi:
             return self._sample_multi(x0, velocity_fn, steps, return_trajectory, disable_quantization)
@@ -524,6 +682,97 @@ class FlowQuant(nn.Module):
             quantize_fns=quantize_fns,
             return_trajectory=return_trajectory,
         )
+
+    # ------------------------------------------------------------------
+    # Feature-cluster inference
+    # ------------------------------------------------------------------
+
+    def _sample_with_feature_cluster(
+        self,
+        x0: torch.FloatTensor,
+        velocity_fn: Callable,
+        num_steps: int,
+        return_trajectory: bool,
+        force_waypoints: Optional[list[int]] = None,
+        gravity_g: float = 0.0,
+    ) -> SolverOutput:
+        """Inference with feature-cluster waypoints.
+
+        At each t_q: assign to nearest centroid, sample noisy waypoint,
+        then continue ODE. After final waypoint, denormalize output.
+        """
+        t_qs = self.config.flow_config.waypoints()
+        fc_modules = self.feature_clusters
+
+        if force_waypoints is not None:
+            # Normalizziamo force_waypoints in una lista di liste.
+            if isinstance(force_waypoints[0], int):
+                if len(t_qs) == 1:
+                    force_waypoints = [force_waypoints]
+                else:
+                    assert len(force_waypoints) == len(t_qs), "Must provide a cluster index for each waypoint"
+                    force_waypoints = [[idx] for idx in force_waypoints]
+            else:
+                assert len(force_waypoints) == len(t_qs), "Must provide choices for each waypoint"
+
+            original_velocity_fn = velocity_fn
+            
+            def forced_velocity_fn(x, t):
+                t_val = t[0].item()
+                # Find the next waypoint
+                for i, tq in enumerate(t_qs):
+                    if t_val < tq - 1e-5:
+                        choices = force_waypoints[i]
+                        B = x.shape[0]
+                        # Distribuiamo il batch in modo ciclico tra le scelte
+                        idx_tensor = torch.arange(B, device=x.device) % len(choices)
+                        choices_tensor = torch.tensor(choices, device=x.device)
+                        cluster_indices = choices_tensor[idx_tensor]
+                        
+                        W = fc_modules[i].centroids[cluster_indices] # Shape: [B, D]
+                        if x.ndim > 2:
+                            W = W.view(B, *x.shape[1:])
+                        return (W - x) / (tq - t_val)
+                # After all waypoints, use the original velocity_fn
+                return original_velocity_fn(x, t)
+            
+            velocity_fn = forced_velocity_fn
+
+        # Track last assignments for denormalization
+        last_assignments: torch.LongTensor = None
+
+        def make_cluster_qfn(i: int, tq: float) -> Callable:
+            def qfn(x: torch.Tensor) -> torch.Tensor:
+                nonlocal last_assignments
+                x_flat = x.reshape(x.shape[0], -1) if x.ndim > 2 else x
+                x_hat, assignments = fc_modules[i].assign_and_sample(x_flat)
+                last_assignments = assignments
+                return x_hat.reshape(x.shape)
+            return qfn
+
+        quantize_fns = [make_cluster_qfn(i, tq) for i, tq in enumerate(t_qs)]
+
+        result = self.solver.solve(
+            x0=x0,
+            velocity_fn=velocity_fn,
+            num_steps=num_steps,
+            t_qs=t_qs,
+            quantize_fns=quantize_fns,
+            return_trajectory=return_trajectory,
+            gravity_g=gravity_g,
+            feature_clusters=fc_modules if gravity_g > 0 else None,
+        )
+
+        # Denormalize final output using last waypoint's cluster stats
+        if last_assignments is not None:
+            x1_norm = result.x1.reshape(result.x1.shape[0], -1)
+            x1_denorm = fc_modules[-1].denormalize(x1_norm, last_assignments)
+            result = SolverOutput(
+                x1=x1_denorm.reshape(result.x1.shape),
+                trajectory=result.trajectory,
+            )
+
+        return result
 
     # ------------------------------------------------------------------
     # Helpers

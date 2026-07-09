@@ -1,0 +1,66 @@
+# @package _global_
+# Experiment F-2 — 8-Gaussians, feature-space clustering waypoint at t=0.5, K=10 clusters
+# Same as F-1 but with 10 clusters for finer partitioning of the interpolation space.
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+use_velocity_bsq: false
+velocity_bsq_threshold: 0.75
+
+training:
+  output_dir: checkpoints/exps/f2-gauss-fcluster-10wp
+  num_train_epochs: 50
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 500
+  save_steps: 50000
+  eval_steps: 50000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: 100000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+  warmstart_backbone_checkpoint: null
+  freeze_backbone: false
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: 0.5
+  t_qs: null
+  quant_target: x_tq
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+  use_x0_cond: false
+unet_backbone: null
+dit_backbone: null
+
+# No VQ/dequantizer — feature clustering replaces them
+vq: null
+fsq: null
+bsq: null
+stochastic_dequantizer: null
+residual_dequantizer: null
+linear_dequantizer: null
+
+feature_cluster:
+  - n_clusters: 32
+    noise_std: 0.5
+    ema_decay: 0.99
+    learnable_noise: true

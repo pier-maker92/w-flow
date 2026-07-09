@@ -27,6 +27,8 @@ class ODESolver:
         t_qs: Optional[List[float]] = None,
         quantize_fns: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None,
         return_trajectory: bool = False,
+        gravity_g: float = 0.0,
+        feature_clusters: Optional[List] = None,
     ) -> SolverOutput:
         """Integrate dx/dt = v_θ(x, t) from t=0 to t=1.
 
@@ -64,21 +66,59 @@ class ODESolver:
 
             if dt_step > 1e-6:
                 t_vec = x.new_full((x.shape[0],), t)
+                
+                # Calcola la forza gravitazionale se abilitata
+                gravity_v = 0.0
+                if gravity_g > 0 and feature_clusters is not None:
+                    # Trova il prossimo waypoint non ancora applicato
+                    next_wp_idx = None
+                    for i, (tq, _) in enumerate(waypoints):
+                        if not applied[i]:
+                            next_wp_idx = i
+                            break
+                    
+                    if next_wp_idx is not None:
+                        fc = feature_clusters[next_wp_idx]
+                        centroids = fc.centroids  # [K, D]
+                        # Normalize mass so it sums to 1. This prevents G from needing to be 1e-8 due to unbounded accumulation.
+                        raw_masses = fc.cluster_mass
+                        masses = raw_masses / (raw_masses.sum() + 1e-8)  # [K]
+                        
+                        eps = getattr(fc.config, "gravity_softening", 0.01)
+                        
+                        # Calcola le distanze da tutti i centroidi
+                        # x: [B, D], centroids: [K, D]
+                        # dist_sq: [B, K]
+                        diff = centroids.unsqueeze(0) - x.unsqueeze(1) # [B, K, D]
+                        dist_sq = (diff ** 2).sum(dim=-1)
+                        dist = torch.sqrt(dist_sq.clamp(min=1e-8))
+                        
+                        # F = G * m / (d^2 + eps) * (diff / d)
+                        # diff / dist shape is [B, K, D]
+                        direction = diff / dist.unsqueeze(-1)
+                        magnitude = gravity_g * masses.unsqueeze(0) / (dist_sq + eps) # [B, K]
+                        
+                        force = (magnitude.unsqueeze(-1) * direction).sum(dim=1) # [B, D]
+                        gravity_v = force
+
+                def get_v(x_curr, t_curr):
+                    v = velocity_fn(x_curr, t_curr)
+                    return v + gravity_v
 
                 if self.method == "euler":
-                    x = x + dt_step * velocity_fn(x, t_vec)
+                    x = x + dt_step * get_v(x, t_vec)
                 elif self.method == "midpoint":
-                    v1 = velocity_fn(x, t_vec)
+                    v1 = get_v(x, t_vec)
                     x_mid = x + 0.5 * dt_step * v1
                     t_mid = x.new_full((x.shape[0],), t + 0.5 * dt_step)
-                    x = x + dt_step * velocity_fn(x_mid, t_mid)
+                    x = x + dt_step * get_v(x_mid, t_mid)
                 else:  # rk4
-                    v1 = velocity_fn(x, t_vec)
+                    v1 = get_v(x, t_vec)
                     t_half = x.new_full((x.shape[0],), t + 0.5 * dt_step)
                     t_full = x.new_full((x.shape[0],), t + dt_step)
-                    v2 = velocity_fn(x + 0.5 * dt_step * v1, t_half)
-                    v3 = velocity_fn(x + 0.5 * dt_step * v2, t_half)
-                    v4 = velocity_fn(x + dt_step * v3, t_full)
+                    v2 = get_v(x + 0.5 * dt_step * v1, t_half)
+                    v3 = get_v(x + 0.5 * dt_step * v2, t_half)
+                    v4 = get_v(x + dt_step * v3, t_full)
                     x = x + (dt_step / 6) * (v1 + 2 * v2 + 2 * v3 + v4)
 
                 if traj is not None:
@@ -89,7 +129,13 @@ class ODESolver:
             # Apply waypoint if we landed exactly on it
             for i, (tq, qfn) in enumerate(waypoints):
                 if not applied[i] and abs(t - tq) <= 1e-5:
-                    x = qfn(x)
+                    if gravity_g > 0:
+                        # In gravity mode, we don't perform the hard jump. 
+                        # We just run qfn(x) in case it's needed for state tracking, but keep x unchanged.
+                        _ = qfn(x)
+                    else:
+                        x = qfn(x)
+                        
                     applied[i] = True
                     if traj is not None and dt_step > 1e-6:
                         traj[-1] = x.clone()

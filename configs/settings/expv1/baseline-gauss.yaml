@@ -1,0 +1,61 @@
+# @package _global_
+# Baseline Experiment — 8-Gaussians, Standard Rectified Flow
+# No quantization, no waypoints, no clustering. Just a straight flow from x0 to x1.
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+use_velocity_bsq: false
+velocity_bsq_threshold: 0.75
+
+training:
+  output_dir: checkpoints/exps/baseline-gauss
+  num_train_epochs: 50
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 500
+  save_steps: 50000
+  eval_steps: 50000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: 100000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+  warmstart_backbone_checkpoint: null
+  freeze_backbone: false
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: null
+  t_qs: null
+  quant_target: null
+  source_std: 1.0
+  commitment_weight: 0.0
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+  use_x0_cond: false
+unet_backbone: null
+dit_backbone: null
+
+# Disable ALL quantizers and bottlenecks
+vq: null
+fsq: null
+bsq: null
+stochastic_dequantizer: null
+residual_dequantizer: null
+linear_dequantizer: null
+feature_cluster: null

@@ -1,0 +1,78 @@
+# @package _global_
+# Experiment F-3 — 8-Gaussians, multi-waypoint feature-space clustering
+# Two waypoints: t=0.25 (K=2 clusters) and t=0.50 (K=4 clusters)
+# Segments: [0, 0.25] x0→wp0_hat, [0.25, 0.50] wp0_hat→wp1_hat, [0.50, 1.0] wp1_hat→x1_norm
+data_dim: 2
+image_size: null
+in_channels: null
+use_velocity_quant: false
+use_velocity_bsq: false
+velocity_bsq_threshold: 0.75
+
+training:
+  output_dir: checkpoints/exps/f3-gauss-fcluster-multi
+  num_train_epochs: 50
+  per_device_train_batch_size: 512
+  learning_rate: 3e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  seed: 42
+  dataset_name: gaussians
+  eval_num_samples: 500
+  save_steps: 50000
+  eval_steps: 50000
+  logging_steps: 100
+  bf16: false
+  fp16: false
+  report_to: null
+  wandb_project: null
+  wandb_run_name: null
+  gaussians_n: 100000
+  gaussians_radius: 5.0
+  gaussians_std: 0.3
+  swissroll_noise: null
+  warmstart_backbone_checkpoint: null
+  freeze_backbone: false
+
+flow:
+  flow_type: rectified
+  solver: midpoint
+  num_steps: 100
+  t_q: null
+  t_qs: [0.25, 0.50]
+  quant_target: x_tq
+  source_std: 1.0
+  commitment_weight: 0.25
+
+mlp_backbone:
+  hidden_dim: 256
+  num_layers: 4
+  time_embed_dim: 64
+  use_x0_cond: false
+unet_backbone: null
+dit_backbone: null
+
+# No VQ/dequantizer — feature clustering replaces them
+vq: null
+fsq: null
+bsq: null
+stochastic_dequantizer: null
+residual_dequantizer: null
+linear_dequantizer: null
+
+# Feature-space clustering: 2 waypoints
+#   t=0.25 → K=2 clusters
+#   t=0.50 → K=4 clusters
+feature_cluster:
+  - n_clusters: 2
+    noise_std: 1.00
+    ema_decay: 0.99
+    project_centroids: true
+    gravity_mode: true
+    gravity_softening: 0.01
+  - n_clusters: 4
+    noise_std: 1.00
+    ema_decay: 0.99
+    project_centroids: true
+    gravity_mode: true
+    gravity_softening: 0.01

@@ -31,6 +31,13 @@ class FlowQuantTrainer(Trainer):
             }
             if outputs.ae_loss is not None:
                 log_dict["ae_loss"] = outputs.ae_loss.item()
+                
+            unwrapped_model = model.module if hasattr(model, "module") else model
+            if getattr(unwrapped_model, "feature_clusters", None) is not None:
+                for i, fc in enumerate(unwrapped_model.feature_clusters):
+                    if fc.log_noise_std is not None:
+                        log_dict[f"noise_std_wp{i}"] = torch.exp(fc.log_noise_std).item()
+                        
             self.log(log_dict)
         return (loss, outputs) if return_outputs else loss
 
@@ -104,6 +111,8 @@ def main(cfg: DictConfig) -> None:
         data_collator=collator,
     )
     trainer.train()
+    trainer.save_model(output_dir)
+    log.info(f"Training complete. Final model saved to {output_dir}")
 
 
 if __name__ == "__main__":
